@@ -383,7 +383,8 @@ if uploaded_file is not None:
                     cols = st.columns(2)
                     for i, (fig, caption) in enumerate(figures):
                         with cols[i % 2]:
-                            st.pyplot(fig, caption=caption)
+                            st.pyplot(fig)
+                            st.caption(caption)
                 else:
                     st.info("No visualizations generated for this file.")
                 
