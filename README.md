@@ -6,4 +6,4 @@ Streamlit app for analyzing files (Excel, PNG, etc.) using Pandas, Pytesseract O
 3. Run: `streamlit run data_analyst_app.py`
 4. Test: `http://localhost:8501`
 ## Deployment
-Deployed on Render: [link]
+Deployed on Render: [https://data-analyst-app.onrender.com]
