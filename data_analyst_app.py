@@ -302,7 +302,7 @@ def analyze_dataframe(data_dict):
         return None, []
 
 # Question Answering
-def answer_question(context, question, retries=5, delay=60):
+def answer_question(context, question, retries=3, delay=10, timeout=30):
     prompt = (
         f"You are a data analyst expert. Answer the question accurately and concisely using the provided dataset context.\n\n"
         f"Dataset Context:\n{context}\n\n"
@@ -326,17 +326,22 @@ def answer_question(context, question, retries=5, delay=60):
                 model="meta-llama/Llama-3-8b-chat-hf",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=512
+                max_tokens=512,
+                timeout=timeout  # Add timeout to prevent hanging
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
             if "429" in str(e):
                 logger.warning(f"Rate limit error (429). Retrying in {delay} seconds... (Attempt {attempt+1}/{retries})")
+                st.warning(f"Rate limit reached. Retrying in {delay} seconds... (Attempt {attempt+1}/{retries})")
                 time.sleep(delay)
+            elif "timeout" in str(e).lower():
+                logger.error(f"API request timed out after {timeout} seconds.")
+                return f"Error: API request timed out after {timeout} seconds. Please try again later."
             else:
                 logger.error(f"Error querying Together AI: {str(e)}")
                 return f"Error querying Together AI: {str(e)}"
-    return "Failed to query Together AI after retries due to rate limit. Please try again later or use a new API key."
+    return "Failed to query Together AI after retries. Please check your API key or try again later."
 
 # Streamlit App
 st.title("📊 Data Analyst App")
