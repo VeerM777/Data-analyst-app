@@ -323,23 +323,26 @@ def analyze_dataframe(data_dict):
 
 # Question Answering with Fallback
 def answer_question(context, question, retries=3, delay=10, timeout=60):
-    prompt = (
-        f"You are a data analyst expert. Answer the question accurately and concisely using the provided dataset context.\n\n"
-        f"Dataset Context:\n{context}\n\n"
-        f"Question: {question}\n\n"
-        f"Instructions:\n"
-        f"- Use only summaries: total_sales, total_profit, unique_customers, main_category_counts, region_sales, monthly_sales, monthly_profit, sales_profit_corr.\n"
-        f"- For totals, use 'total_sales' and 'total_profit' from 'Merged' sheet; fallback to 'OrderBreakdown'.\n"
-        f"- For unique customers, use 'unique_customers' from 'ListOfOrders' or 'Merged'.\n"
-        f"- For category questions (e.g., average profit by category), use 'main_category_counts' from 'OrderBreakdown' for raw order counts.\n"
-        f"- For region sales (e.g., highest sales region), use 'region_sales' from 'Merged' sheet only.\n"
-        f"- For monthly trends or highest profit month, use 'monthly_sales' and 'monthly_profit' from 'Merged' sheet only. List top 5 months for trends with values; exact month/value for highest profit.\n"
-        f"- Ignore 'SalesTargets' for actual sales or profit.\n"
-        f"- Appliances are part of Office Supplies, not Technology.\n"
-        f"- If data is missing, state 'Data missing; check Merged sheet'.\n"
-        f"- Do not guess or invent data.\n"
-        f"- Format numbers with commas (e.g., 2,348,482) and round averages to 2 decimals.\n"
-    )
+    prompt = f"""You are a data analyst expert. Answer the question accurately and concisely using the provided dataset context.
+
+Dataset Context:
+{context}
+
+Question: {question}
+
+Instructions:
+- Use only summaries: total_sales, total_profit, unique_customers, main_category_counts, region_sales, monthly_sales, monthly_profit, sales_profit_corr.
+- For totals, use 'total_sales' and 'total_profit' from 'Merged' sheet; fallback to 'OrderBreakdown'.
+- For unique customers, use 'unique_customers' from 'ListOfOrders' or 'Merged'.
+- For category questions (e.g., average profit by category), use 'main_category_counts' from 'OrderBreakdown' for raw order counts.
+- For region sales (e.g., highest sales region), use 'region_sales' from 'Merged' sheet only.
+- For monthly trends or highest profit month, use 'monthly_sales' and 'monthly_profit' from 'Merged' sheet only. List top 5 months for trends with values; exact month/value for highest profit.
+- Ignore 'SalesTargets' for actual sales or profit.
+- Appliances are part of Office Supplies, not Technology.
+- If data is missing, state 'Data missing; check Merged sheet'.
+- Do not guess or invent data.
+- Format numbers with commas (e.g., 2,348,482) and round averages to 2 decimals.
+"""
     url = "https://api.together.xyz/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {TOGETHER_API_KEY}",
