@@ -382,12 +382,11 @@ Instructions:
             return f"Unexpected error querying Together AI: {str(e)}"
     
     # Fallback response if API fails after retries
-    fallback_response = (
-        f"Unable to query the API after {retries} attempts due to timeout. "
-        f"Here's a basic summary:\n"
-        f"- Total Sales (Merged sheet): {context.split('Total Sales: ')[1].split('\n')[0] if 'Total Sales: ' in context else 'Not available'}\n"
-        f"- Total Profit (Merged sheet): {context.split('Total Profit: ')[1].split('\n')[0] if 'Total Profit: ' in context else 'Not available'}"
-    )
+    total_sales_part = context.split('Total Sales: ')[1].split('\n')[0] if 'Total Sales: ' in context else 'Not available'
+    total_profit_part = context.split('Total Profit: ')[1].split('\n')[0] if 'Total Profit: ' in context else 'Not available'
+    fallback_response = f"""Unable to query the API after {retries} attempts due to timeout. Here's a basic summary:
+- Total Sales (Merged sheet): {total_sales_part}
+- Total Profit (Merged sheet): {total_profit_part}"""
     return fallback_response
 
 # Streamlit App
