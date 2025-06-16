@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 st.set_page_config(page_title="Data Analyst App", layout="wide")
 
 # Setup API Key
-TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
+TOGETHER_API_KEY = "d4e50d91d67d1ad9d2a9530e0eb4c9e625fdbe426909746cc24c2156cd72bf83"
 if not TOGETHER_API_KEY:
     st.error("TOGETHER_API_KEY not set. Please set it in Render's Environment Variables.")
     st.stop()
