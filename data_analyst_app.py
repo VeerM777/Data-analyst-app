@@ -5,7 +5,6 @@ import seaborn as sns
 import numpy as np
 import io
 import os
-from together import Together
 import logging
 from PIL import Image
 import pytesseract
@@ -23,11 +22,10 @@ logger = logging.getLogger(__name__)
 st.set_page_config(page_title="Data Analyst App", layout="wide")
 
 # Setup API Key
-TOGETHER_API_KEY = "d4e50d91d67d1ad9d2a9530e0eb4c9e625fdbe426909746cc24c2156cd72bf83"
+TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
 if not TOGETHER_API_KEY:
     st.error("TOGETHER_API_KEY not set. Please set it in Render's Environment Variables.")
     st.stop()
-client = Together(api_key=TOGETHER_API_KEY)
 
 # Custom Describe Function
 def custom_describe(df):
@@ -39,7 +37,7 @@ def custom_describe(df):
 
 # Detect Column Types Dynamically
 def detect_columns(df):
-    df.columns = [col.strip().lower() for col in df.columns]
+    columns_lower = [col.strip().lower() for col in df.columns]
     columns = {
         'category': None,
         'sub_category': None,
@@ -50,24 +48,23 @@ def detect_columns(df):
         'customer': None,
         'id': None
     }
-    for col in df.columns:
-        col_lower = col.lower()
-        if 'category' in col_lower and 'sub' not in col_lower:
-            columns['category'] = col
-        elif 'sub' in col_lower and 'category' in col_lower:
-            columns['sub_category'] = col
-        elif 'profit' in col_lower or 'margin' in col_lower:
-            columns['profit'] = col
-        elif 'sales' in col_lower or 'revenue' in col_lower:
-            columns['sales'] = col
-        elif 'region' in col_lower or 'area' in col_lower:
-            columns['region'] = col
-        elif 'date' in col_lower or 'time' in col_lower:
-            columns['date'] = col
-        elif 'customer' in col_lower or 'client' in col_lower:
-            columns['customer'] = col
-        elif 'id' in col_lower:
-            columns['id'] = col
+    for idx, col in enumerate(columns_lower):
+        if 'category' in col and 'sub' not in col:
+            columns['category'] = df.columns[idx]
+        elif 'sub' in col and 'category' in col:
+            columns['sub_category'] = df.columns[idx]
+        elif 'profit' in col or 'margin' in col:
+            columns['profit'] = df.columns[idx]
+        elif 'sales' in col or 'revenue' in col:
+            columns['sales'] = df.columns[idx]
+        elif 'region' in col or 'area' in col:
+            columns['region'] = df.columns[idx]
+        elif 'date' in col or 'time' in col:
+            columns['date'] = df.columns[idx]
+        elif 'customer' in col or 'client' in col:
+            columns['customer'] = df.columns[idx]
+        elif 'id' in col:
+            columns['id'] = df.columns[idx]
     numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
     if not columns['sales'] and numerical_cols.size > 0:
         for col in numerical_cols:
@@ -82,7 +79,7 @@ def detect_columns(df):
     logger.info(f"Detected columns: {columns}")
     return columns
 
-# Load File (Modified for Streamlit without File I/O)
+# Load File
 def load_file(uploaded_file):
     try:
         file_type = uploaded_file.type
@@ -90,10 +87,11 @@ def load_file(uploaded_file):
         if file_type == "text/plain":
             return uploaded_file.read().decode('utf-8', errors='ignore')
         elif file_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-            xl = pd.ExcelFile(uploaded_file, engine='openpyxl')
+            file_bytes = uploaded_file.read()
+            xl = pd.ExcelFile(io.BytesIO(file_bytes), engine='openpyxl')
             data = {}
             for sheet_name in xl.sheet_names:
-                df = pd.read_excel(uploaded_file, sheet_name=sheet_name, engine='openpyxl')
+                df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, engine='openpyxl')
                 logger.info(f"Columns in sheet '{sheet_name}': {df.columns.tolist()}")
                 data[sheet_name] = df
             return data
@@ -121,7 +119,7 @@ def load_file(uploaded_file):
         logger.error(f"Error loading file: {str(e)}")
         raise
 
-# DataFrame Analysis (Memory-Optimized)
+# DataFrame Analysis
 def analyze_dataframe(data_dict):
     try:
         analysis_results = {}
@@ -134,8 +132,8 @@ def analyze_dataframe(data_dict):
             order_breakdown.columns = [col.strip().lower() for col in order_breakdown.columns]
             if 'order id' in list_orders.columns and 'order id' in order_breakdown.columns:
                 try:
-                    list_orders['order id'] = list_orders['order id'].astype(str).str.strip().str.replace(r'^\D+', '', regex=True)
-                    order_breakdown['order id'] = order_breakdown['order id'].astype(str).str.strip().str.replace(r'^\D+', '', regex=True)
+                    list_orders['order id'] = list_orders['order id'].fillna('').astype(str).str.strip().str.replace(r'^\D+', '', regex=True)
+                    order_breakdown['order id'] = order_breakdown['order id'].fillna('').astype(str).str.strip().str.replace(r'^\D+', '', regex=True)
                     order_breakdown['sales'] = pd.to_numeric(order_breakdown['sales'], errors='coerce').fillna(0)
                     order_breakdown['profit'] = pd.to_numeric(order_breakdown['profit'], errors='coerce').fillna(0)
                     order_breakdown_agg = order_breakdown.groupby('order id').agg({
@@ -269,7 +267,8 @@ def analyze_dataframe(data_dict):
                 df['month_year'] = df[columns['date']].dt.to_period('M')
                 monthly_sales = df.groupby('month_year')[columns['sales']].sum().reset_index()
                 monthly_sales['month_year'] = monthly_sales['month_year'].astype(str)
-                monthly_sales = monthly_sales.sort_values(columns['sales'], ascending=False).head(5)
+                monthly_sales = monthly_sales.sort_values('month_year')
+                monthly_sales_display = monthly_sales.sort_values(columns['sales'], ascending=False).head(5)
                 fig, ax = plt.subplots(figsize=(10, 6))
                 sns.lineplot(x='month_year', y=columns['sales'], data=monthly_sales, ax=ax)
                 plt.title(f'Monthly Sales Trend ({sheet_name})')
@@ -278,11 +277,12 @@ def analyze_dataframe(data_dict):
                 logger.info(f"Created monthly sales trend plot for {sheet_name}")
                 plt.close(fig)
                 logger.info(f"Closed monthly sales trend plot for {sheet_name}")
-                monthly_sales = monthly_sales.to_string(index=False)
+                monthly_sales_display = monthly_sales_display.to_string(index=False)
                 if columns['profit']:
                     monthly_profit = df.groupby('month_year')[columns['profit']].sum().reset_index()
                     monthly_profit['month_year'] = monthly_profit['month_year'].astype(str)
-                    monthly_profit = monthly_profit.sort_values(columns['profit'], ascending=False).head(5)
+                    monthly_profit = monthly_profit.sort_values('month_year')
+                    monthly_profit_display = monthly_profit.sort_values(columns['profit'], ascending=False).head(5)
                     fig, ax = plt.subplots(figsize=(10, 6))
                     sns.lineplot(x='month_year', y=columns['profit'], data=monthly_profit, ax=ax)
                     plt.title(f'Monthly Profit Trend ({sheet_name})')
@@ -291,7 +291,7 @@ def analyze_dataframe(data_dict):
                     logger.info(f"Created monthly profit trend plot for {sheet_name}")
                     plt.close(fig)
                     logger.info(f"Closed monthly profit trend plot for {sheet_name}")
-                    monthly_profit = monthly_profit.to_string(index=False)
+                    monthly_profit_display = monthly_profit_display.to_string(index=False)
 
             analysis_results[sheet_name] = {
                 'columns': df.columns.tolist(),
@@ -309,8 +309,8 @@ def analyze_dataframe(data_dict):
                 'sub_category_counts': category_counts,
                 'main_category_counts': main_category_counts,
                 'profit_margins': profit_margins,
-                'monthly_sales': monthly_sales,
-                'monthly_profit': monthly_profit,
+                'monthly_sales': monthly_sales_display,
+                'monthly_profit': monthly_profit_display,
                 'sales_profit_corr': sales_profit_corr,
                 'unique_customers': unique_customers,
                 'detected_columns': columns
@@ -343,14 +343,14 @@ Instructions:
 - Do not guess or invent data.
 - Format numbers with commas (e.g., 2,348,482) and round averages to 2 decimals.
 """
-    url = "https://api.together.xyz/v1/chat/completions"
+    url = "https://api.together.xyz/v1/completions"
     headers = {
         "Authorization": f"Bearer {TOGETHER_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "grok-8b",  # Switch to a lighter model
-        "messages": [{"role": "user", "content": prompt}],
+        "model": "meta-llama/Llama-3-8b-chat-hf",
+        "prompt": prompt,
         "temperature": 0.7,
         "max_tokens": 512
     }
@@ -361,7 +361,7 @@ Instructions:
             response.raise_for_status()
             result = response.json()
             if "choices" in result and result["choices"]:
-                return result["choices"][0]["message"]["content"].strip()
+                return result["choices"][0]["text"].strip()
             else:
                 logger.error("No choices in API response.")
                 return "Error: No valid response from API."
@@ -380,7 +380,6 @@ Instructions:
         except Exception as e:
             logger.error(f"Unexpected error querying Together AI: {str(e)}")
             return f"Unexpected error querying Together AI: {str(e)}"
-    
     # Fallback response if API fails after retries
     total_sales_part = context.split('Total Sales: ')[1].split('\n')[0] if 'Total Sales: ' in context else 'Not available'
     total_profit_part = context.split('Total Profit: ')[1].split('\n')[0] if 'Total Profit: ' in context else 'Not available'
@@ -424,7 +423,7 @@ if uploaded_file is not None:
                     st.subheader(f"Sheet: {sheet_name}")
                     if sheet_name in content:
                         st.dataframe(content[sheet_name].head())
-                context = "\n".join(context_parts)[:2000]
+                context = "\n".join(context_parts)[:1000]
                 st.write("### Analysis Summary")
                 st.text(context[:500] + "..." if len(context) > 500 else context)
                 
@@ -436,8 +435,7 @@ if uploaded_file is not None:
                         with cols[i % 2]:
                             st.pyplot(fig)
                             st.caption(caption)
-                            plt.close(fig)
-                            logger.info(f"Closed figure after display: {caption}")
+                            logger.info(f"Displayed figure: {caption}")
                 else:
                     st.info("No visualizations generated for this file.")
                 
@@ -456,10 +454,10 @@ if uploaded_file is not None:
                 st.error("Analysis failed due to errors.")
                 
         elif isinstance(content, str):  # Text, PDF, or PNG
-            context = f"Textual content:\n{content[:2000]}"
+            context = f"Textual content:\n{content[:1000]}"
             st.text_area("Extracted Text", content[:500] + "..." if len(content) > 500 else content, height=200)
             if uploaded_file.type == "image/png":
-                uploaded_file.seek(0)  # Reset file pointer
+                uploaded_file.seek(0)
                 st.image(uploaded_file, caption="Uploaded Image", use_column_width=True)
                 
             # Question input for text-based files
