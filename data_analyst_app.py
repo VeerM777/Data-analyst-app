@@ -52,12 +52,13 @@ def detect_columns(df):
     for idx, col in enumerate(columns_lower):
         if 'category' in col and 'sub' not in col:
             columns['category'] = df.columns[idx]
-        elif 'sub' in col and 'category' in col or 'item' in col:
+        elif ('sub' in col and 'category' in col) or 'item' in col:
             columns['sub_category'] = df.columns[idx]
         elif 'profit' in col or 'margin' in col:
             columns['profit'] = df.columns[idx]
-        elif 'sales' in col or 'revenue' in col or 'amount' in col: # Added 'amount' for store_sales.csv
-            columns['sales'] = df.columns[idx]
+        elif 'sales' in col or 'revenue' in col or 'amount' in col:
+            if 'id' not in col: # Avoid picking 'CustomerID' as sales
+                columns['sales'] = df.columns[idx]
         elif 'region' in col or 'area' in col:
             columns['region'] = df.columns[idx]
         elif 'date' in col or 'time' in col:
@@ -70,12 +71,12 @@ def detect_columns(df):
     numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
     if not columns['sales'] and numerical_cols.size > 0:
         for col in numerical_cols:
-            if df[col].max() > 0:
+            if df[col].max() > 0 and 'id' not in col.lower():
                 columns['sales'] = col
                 break
     if not columns['profit'] and numerical_cols.size > 0:
         for col in numerical_cols:
-            if col != columns['sales']:
+            if col != columns['sales'] and 'id' not in col.lower():
                 columns['profit'] = col
                 break
     logger.info(f"Detected columns: {columns}")
@@ -168,6 +169,7 @@ def analyze_dataframe(data_dict):
             describe_str = custom_describe(df).to_string()
             corr_str = df.corr(numeric_only=True).to_string() if len(df.select_dtypes(include=['number']).columns) > 1 else 'Not available'
 
+            # VITAL FIX: Initialize ALL summary variables to None to avoid UnboundLocalError
             total_sales = df[columns['sales']].sum() if columns['sales'] else None
             total_profit = df[columns['profit']].sum() if columns['profit'] else None
             profit_summary = None
@@ -177,8 +179,8 @@ def analyze_dataframe(data_dict):
             category_counts = None
             main_category_counts = None
             profit_margins = None
-            monthly_sales = None
-            monthly_profit = None
+            monthly_sales_display = None
+            monthly_profit_display = None
             sales_profit_corr = None
             unique_customers = None
 
@@ -265,7 +267,7 @@ def analyze_dataframe(data_dict):
                 monthly_sales = monthly_sales.sort_values('month_year')
                 monthly_sales_display = monthly_sales.sort_values(columns['sales'], ascending=False).head(5)
                 fig, ax = plt.subplots(figsize=(10, 6))
-                sns.lineplot(x='month_year', y=columns['sales'], data=monthly_sales, ax=ax)
+                sns.lineplot(x='month_year', y='sales', data=monthly_sales, ax=ax) # Fixed to use column name
                 plt.title(f'Monthly Sales Trend ({sheet_name})')
                 plt.xticks(rotation=45)
                 figures.append((fig, f"Monthly Sales Trend ({sheet_name})"))
@@ -277,7 +279,7 @@ def analyze_dataframe(data_dict):
                     monthly_profit = monthly_profit.sort_values('month_year')
                     monthly_profit_display = monthly_profit.sort_values(columns['profit'], ascending=False).head(5)
                     fig, ax = plt.subplots(figsize=(10, 6))
-                    sns.lineplot(x='month_year', y=columns['profit'], data=monthly_profit, ax=ax)
+                    sns.lineplot(x='month_year', y='profit', data=monthly_profit, ax=ax)
                     plt.title(f'Monthly Profit Trend ({sheet_name})')
                     plt.xticks(rotation=45)
                     figures.append((fig, f"Monthly Profit Trend ({sheet_name})"))
@@ -315,7 +317,6 @@ def analyze_dataframe(data_dict):
 # Question Answering with Groq
 def answer_question(context, question, retries=3, delay=10):
     """Queries the Groq API to answer questions based on the provided data context."""
-    # Fix for proxy error: Use standard initialization
     client = Groq(api_key=GROQ_API_KEY)
 
     prompt = f"""You are a data analyst expert. Answer the question accurately and concisely using the provided dataset context.
