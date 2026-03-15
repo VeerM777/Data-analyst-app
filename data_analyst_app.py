@@ -52,11 +52,11 @@ def detect_columns(df):
     for idx, col in enumerate(columns_lower):
         if 'category' in col and 'sub' not in col:
             columns['category'] = df.columns[idx]
-        elif 'sub' in col and 'category' in col:
+        elif 'sub' in col and 'category' in col or 'item' in col:
             columns['sub_category'] = df.columns[idx]
         elif 'profit' in col or 'margin' in col:
             columns['profit'] = df.columns[idx]
-        elif 'sales' in col or 'revenue' in col:
+        elif 'sales' in col or 'revenue' in col or 'amount' in col: # Added 'amount' for store_sales.csv
             columns['sales'] = df.columns[idx]
         elif 'region' in col or 'area' in col:
             columns['region'] = df.columns[idx]
@@ -66,6 +66,7 @@ def detect_columns(df):
             columns['customer'] = df.columns[idx]
         elif 'id' in col:
             columns['id'] = df.columns[idx]
+            
     numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
     if not columns['sales'] and numerical_cols.size > 0:
         for col in numerical_cols:
@@ -182,7 +183,8 @@ def analyze_dataframe(data_dict):
             unique_customers = None
 
             if columns['sub_category'] and columns['category']:
-                df.loc[df[columns['sub_category']].str.contains('Appliances', na=False), columns['category']] = 'Office Supplies'
+                if df[columns['sub_category']].dtype == 'object':
+                    df.loc[df[columns['sub_category']].str.contains('Appliances', na=False, case=False), columns['category']] = 'Office Supplies'
 
             numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
             categorical_cols = df.select_dtypes(include=['object']).columns
@@ -253,7 +255,7 @@ def analyze_dataframe(data_dict):
                 sales_profit_corr = np.corrcoef(df[columns['sales']].dropna(), df[columns['profit']].dropna())[0, 1]
                 sales_profit_corr = f"Correlation between sales and profit: {sales_profit_corr:.3f}"
             if columns['customer']:
-                df[columns['customer']] = df[columns['customer']].str.strip().str.lower()
+                df[columns['customer']] = df[columns['customer']].astype(str).str.strip().str.lower()
                 unique_customers = df[columns['customer']].nunique()
             if columns['date'] and columns['sales']:
                 df[columns['date']] = pd.to_datetime(df[columns['date']], errors='coerce', dayfirst=True)
@@ -313,6 +315,7 @@ def analyze_dataframe(data_dict):
 # Question Answering with Groq
 def answer_question(context, question, retries=3, delay=10):
     """Queries the Groq API to answer questions based on the provided data context."""
+    # Fix for proxy error: Use standard initialization
     client = Groq(api_key=GROQ_API_KEY)
 
     prompt = f"""You are a data analyst expert. Answer the question accurately and concisely using the provided dataset context.
