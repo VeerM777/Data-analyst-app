@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Streamlit app configuration
-st.set_page_config(page_title="Data Analyst App", layout="wide")
+st.set_page_config(page_title="Universal Data Analyst App", layout="wide")
 
 # Setup API Key
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -28,16 +28,21 @@ if not GROQ_API_KEY:
     st.error("GROQ_API_KEY not set. Please set it in Render's Environment Variables.")
     st.stop()
 
-# Custom Describe Function
+# --- HELPER FUNCTIONS ---
+
 def custom_describe(df):
+    """Generates an expanded statistical summary for any DataFrame."""
     desc = df.describe(include='all')
     numerical_cols = df.select_dtypes(include=['number']).columns
     if len(numerical_cols) > 0:
         desc.loc['sum'] = df[numerical_cols].sum()
     return desc
 
-# Detect Column Types Dynamically
 def detect_columns(df):
+    """
+    Dynamically maps columns based on domain-agnostic keywords and data types.
+    This allows the app to handle Flights, Sales, Medical, or any other data.
+    """
     columns_lower = [col.strip().lower() for col in df.columns]
     columns = {
         'category': None,
@@ -49,41 +54,55 @@ def detect_columns(df):
         'customer': None,
         'id': None
     }
+    
     for idx, col in enumerate(columns_lower):
+        # 1. Category Mapping
         if 'category' in col and 'sub' not in col:
             columns['category'] = df.columns[idx]
-        elif ('sub' in col and 'category' in col) or 'item' in col:
+        elif 'sub' in col and 'category' in col or any(x in col for x in ['item', 'type', 'species', 'model']):
             columns['sub_category'] = df.columns[idx]
-        elif 'profit' in col or 'margin' in col:
-            columns['profit'] = df.columns[idx]
-        elif 'sales' in col or 'revenue' in col or 'amount' in col:
-            if 'id' not in col: # Avoid picking 'CustomerID' as sales
+        
+        # 2. Performance/Metric 1 (Formerly 'Sales')
+        elif any(x in col for x in ['sales', 'revenue', 'amount', 'distance', 'magnitude', 'total']):
+            if 'id' not in col:
                 columns['sales'] = df.columns[idx]
-        elif 'region' in col or 'area' in col:
+        
+        # 3. Performance/Metric 2 (Formerly 'Profit')
+        elif any(x in col for x in ['profit', 'margin', 'delay', 'score', 'rate', 'value']):
+            columns['profit'] = df.columns[idx]
+            
+        # 4. Location Mapping
+        elif any(x in col for x in ['region', 'area', 'city', 'origin', 'dest', 'state']):
             columns['region'] = df.columns[idx]
-        elif 'date' in col or 'time' in col:
+            
+        # 5. Time Mapping
+        elif any(x in col for x in ['date', 'time', 'year', 'month', 'timestamp']):
             columns['date'] = df.columns[idx]
-        elif 'customer' in col or 'client' in col:
+            
+        # 6. Entity Mapping (Formerly 'Customer')
+        elif any(x in col for x in ['customer', 'client', 'carrier', 'name', 'subject', 'patient']):
             columns['customer'] = df.columns[idx]
+            
         elif 'id' in col:
             columns['id'] = df.columns[idx]
             
-    numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
-    if not columns['sales'] and numerical_cols.size > 0:
-        for col in numerical_cols:
-            if df[col].max() > 0 and 'id' not in col.lower():
-                columns['sales'] = col
+    # Universal Fallback: If keywords fail, pick the best numeric columns
+    num_cols = df.select_dtypes(include=['float64', 'int64']).columns
+    if not columns['sales'] and len(num_cols) > 0:
+        for c in num_cols:
+            if 'id' not in c.lower():
+                columns['sales'] = c
                 break
-    if not columns['profit'] and numerical_cols.size > 0:
-        for col in numerical_cols:
-            if col != columns['sales'] and 'id' not in col.lower():
-                columns['profit'] = col
+    if not columns['profit'] and len(num_cols) > 1:
+        for c in num_cols:
+            if c != columns['sales'] and 'id' not in c.lower():
+                columns['profit'] = c
                 break
-    logger.info(f"Detected columns: {columns}")
+                
     return columns
 
-# Load File
 def load_file(uploaded_file):
+    """Supports CSV, Excel, PDF, DOCX, TXT, and Images (OCR)."""
     try:
         file_type = uploaded_file.type
         logger.info(f"Detected file type: {file_type}")
@@ -92,371 +111,219 @@ def load_file(uploaded_file):
         elif file_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
             file_bytes = uploaded_file.read()
             xl = pd.ExcelFile(io.BytesIO(file_bytes), engine='openpyxl')
-            data = {}
-            for sheet_name in xl.sheet_names:
-                df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, engine='openpyxl')
-                logger.info(f"Columns in sheet '{sheet_name}': {df.columns.tolist()}")
-                data[sheet_name] = df
+            data = {sn: pd.read_excel(io.BytesIO(file_bytes), sheet_name=sn) for sn in xl.sheet_names}
             return data
         elif file_type == "text/csv":
             df = pd.read_csv(uploaded_file, encoding='utf-8', on_bad_lines='skip')
-            logger.info(f"Columns in CSV: {df.columns.tolist()}")
             return {'data': df}
         elif file_type == "application/pdf":
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-            text = "\n".join([page.get_text() for page in doc])
-            logger.info(f"Extracted {len(text)} characters from PDF")
-            return text
+            return "\n".join([page.get_text() for page in doc])
         elif file_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             doc = Document(uploaded_file)
-            text = "\n".join([p.text for p in doc.paragraphs])
-            logger.info(f"Extracted {len(text)} characters from DOCX")
-            return text
-        elif file_type == "image/png":
-            text = pytesseract.image_to_string(Image.open(uploaded_file))
-            logger.info(f"Extracted {len(text)} characters from image via OCR")
-            return text
+            return "\n".join([p.text for p in doc.paragraphs])
+        elif file_type == "image/png" or file_type == "image/jpeg":
+            return pytesseract.image_to_string(Image.open(uploaded_file))
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
     except Exception as e:
         logger.error(f"Error loading file: {str(e)}")
         raise
 
-# DataFrame Analysis
+# --- CORE ANALYSIS ENGINE ---
+
 def analyze_dataframe(data_dict):
     try:
         analysis_results = {}
         figures = []
-        merged_df = None
+        
+        # Preserve specific E-commerce Merging Logic for Superstore datasets
         if 'ListOfOrders' in data_dict and 'OrderBreakdown' in data_dict:
-            list_orders = data_dict['ListOfOrders'].copy()
-            order_breakdown = data_dict['OrderBreakdown'].copy()
-            list_orders.columns = [col.strip().lower() for col in list_orders.columns]
-            order_breakdown.columns = [col.strip().lower() for col in order_breakdown.columns]
-            if 'order id' in list_orders.columns and 'order id' in order_breakdown.columns:
-                try:
-                    list_orders['order id'] = list_orders['order id'].fillna('').astype(str).str.strip().str.replace(r'^\D+', '', regex=True)
-                    order_breakdown['order id'] = order_breakdown['order id'].fillna('').astype(str).str.strip().str.replace(r'^\D+', '', regex=True)
-                    order_breakdown['sales'] = pd.to_numeric(order_breakdown['sales'], errors='coerce').fillna(0)
-                    order_breakdown['profit'] = pd.to_numeric(order_breakdown['profit'], errors='coerce').fillna(0)
-                    order_breakdown_agg = order_breakdown.groupby('order id').agg({
-                        'sales': 'sum',
-                        'profit': 'sum',
-                        'category': lambda x: x.mode()[0] if not x.empty else None,
-                        'sub-category': lambda x: ', '.join(x.dropna().unique()),
-                        'quantity': 'sum' if 'quantity' in order_breakdown.columns else lambda x: None
-                    }).reset_index()
-                    merged_df = pd.merge(list_orders, order_breakdown_agg, on='order id', how='outer')
-                    merged_df['profit'] = merged_df['profit'].fillna(0)
-                    merged_df['sales'] = merged_df['sales'].fillna(0)
-                    data_dict['Merged'] = merged_df
-                except Exception as e:
-                    logger.error(f"Failed to merge sheets: {str(e)}. Skipping merge.")
+            try:
+                lo, ob = data_dict['ListOfOrders'].copy(), data_dict['OrderBreakdown'].copy()
+                lo.columns = [c.strip().lower() for c in lo.columns]
+                ob.columns = [c.strip().lower() for c in ob.columns]
+                if 'order id' in lo.columns and 'order id' in ob.columns:
+                    lo['order id'] = lo['order id'].astype(str).str.strip()
+                    ob['order id'] = ob['order id'].astype(str).str.strip()
+                    ob_agg = ob.groupby('order id').agg({'sales': 'sum', 'profit': 'sum'}).reset_index()
+                    data_dict['Merged'] = pd.merge(lo, ob_agg, on='order id', how='outer').fillna(0)
+            except Exception as e:
+                logger.error(f"Merge error: {e}")
 
         for sheet_name, df in data_dict.items():
-            logger.info(f"Analyzing sheet: {sheet_name}")
+            plt.clf() # Ensure fresh canvas for every chart
             df = df.copy()
             columns = detect_columns(df)
+            
+            # Numeric conversion to avoid plotting errors
+            for k in ['sales', 'profit']:
+                if columns[k]: 
+                    df[columns[k]] = pd.to_numeric(df[columns[k]], errors='coerce').fillna(0)
 
-            if columns['sales']:
-                df[columns['sales']] = pd.to_numeric(df[columns['sales']], errors='coerce').fillna(0)
-            if columns['profit']:
-                df[columns['profit']] = pd.to_numeric(df[columns['profit']], errors='coerce').fillna(0)
+            # Context generation for AI (Full columns + sample rows)
+            data_sample = df.head(3).to_string(index=False)
+            all_cols = ", ".join(df.columns.tolist())
 
-            info_buffer = io.StringIO()
-            df.info(buf=info_buffer)
-            info_str = info_buffer.getvalue()
-            describe_str = custom_describe(df).to_string()
-            corr_str = df.corr(numeric_only=True).to_string() if len(df.select_dtypes(include=['number']).columns) > 1 else 'Not available'
+            # --- Visualizations ---
+            num_cols = df.select_dtypes(include=['number']).columns
+            cat_cols = df.select_dtypes(include=['object', 'category']).columns
 
-            # VITAL FIX: Initialize ALL summary variables to None to avoid UnboundLocalError
-            total_sales = df[columns['sales']].sum() if columns['sales'] else None
-            total_profit = df[columns['profit']].sum() if columns['profit'] else None
-            profit_summary = None
-            sales_summary = None
-            region_sales_summary = None
-            region_profit_summary = None
-            category_counts = None
-            main_category_counts = None
-            profit_margins = None
-            monthly_sales_display = None
-            monthly_profit_display = None
-            sales_profit_corr = None
-            unique_customers = None
+            # 1. First Numeric Distribution
+            if not num_cols.empty:
+                c = num_cols[0]
+                fig, ax = plt.subplots(figsize=(8, 5))
+                # Sample to 10k rows to ensure performance on large datasets
+                sns.histplot(df[c].dropna().head(10000), kde=True, ax=ax, color='teal')
+                plt.title(f'Distribution: {c}')
+                figures.append((fig, f"Numerical analysis of {c}"))
 
-            if columns['sub_category'] and columns['category']:
-                if df[columns['sub_category']].dtype == 'object':
-                    df.loc[df[columns['sub_category']].str.contains('Appliances', na=False, case=False), columns['category']] = 'Office Supplies'
+            # 2. First Categorical Frequency
+            if not cat_cols.empty:
+                c = cat_cols[0]
+                fig, ax = plt.subplots(figsize=(8, 5))
+                # CRITICAL: Always use nlargest(10) to prevent empty/cluttered charts
+                top_10 = df[c].value_counts().nlargest(10)
+                sns.barplot(x=top_10.values, y=top_10.index, ax=ax, palette='viridis')
+                plt.title(f'Top 10: {c}')
+                figures.append((fig, f"Frequency analysis of {c}"))
 
-            numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
-            categorical_cols = df.select_dtypes(include=['object']).columns
-            if numerical_cols.size > 0:
-                col = numerical_cols[0]
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.histplot(df[col].dropna(), kde=True, ax=ax)
-                plt.title(f'Distribution of {col.capitalize()} ({sheet_name})')
-                figures.append((fig, f"Histogram of {col} ({sheet_name})"))
-                logger.info(f"Created histogram for {col} in sheet {sheet_name}")
-                plt.close(fig)
-            if categorical_cols.size > 0:
-                col = categorical_cols[0]
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.countplot(y=col, data=df, order=df[col].value_counts().index[:10], ax=ax)
-                plt.title(f'Count of {col.capitalize()} ({sheet_name})')
-                figures.append((fig, f"Bar Chart of {col} ({sheet_name})"))
-                logger.info(f"Created bar chart for {col} in sheet {sheet_name}")
-                plt.close(fig)
-
-            if columns['sub_category'] and columns['profit']:
-                profit_by_sub_category = df.groupby(columns['sub_category'])[columns['profit']].agg(['sum', 'count']).reset_index()
-                profit_by_sub_category.columns = [columns['sub_category'], 'total_profit', 'order_count']
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.barplot(x='total_profit', y=columns['sub_category'], data=profit_by_sub_category, ax=ax)
-                plt.title(f'Total Profit by Sub-Category ({sheet_name})')
-                plt.xlabel('Total Profit ($)')
-                plt.ylabel('Sub-Category')
-                figures.append((fig, f"Profit by Sub-Category ({sheet_name})"))
-                plt.close(fig)
-                profit_summary = profit_by_sub_category.to_string(index=False)
-                profit_by_sub_category['average_profit'] = profit_by_sub_category['total_profit'] / profit_by_sub_category['order_count']
-                category_counts = profit_by_sub_category[[columns['sub_category'], 'order_count', 'average_profit']].to_string(index=False)
-            if columns['category'] and columns['profit'] and columns['sales']:
-                profit_by_category = df.groupby(columns['category']).agg({
-                    columns['profit']: ['sum', 'count'],
-                    columns['sales']: 'sum'
-                }).reset_index()
-                profit_by_category.columns = [columns['category'], 'total_profit', 'order_count', 'total_sales']
-                profit_by_category['average_profit'] = profit_by_category['total_profit'] / profit_by_category['order_count']
-                profit_by_category['profit_margin'] = profit_by_category['total_profit'] / profit_by_category['total_sales']
-                main_category_counts = profit_by_category[[columns['category'], 'order_count', 'average_profit', 'total_profit', 'total_sales']].to_string(index=False)
-                profit_margins = profit_by_category[[columns['category'], 'profit_margin']].to_string(index=False)
-            if columns['sub_category'] and columns['sales']:
-                sales_by_sub_category = df.groupby(columns['sub_category'])[columns['sales']].sum().reset_index()
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.barplot(x=columns['sales'], y=columns['sub_category'], data=sales_by_sub_category, ax=ax)
-                plt.title(f'Total Sales by Sub-Category ({sheet_name})')
-                plt.xlabel('Total Sales ($)')
-                plt.ylabel('Sub-Category')
-                figures.append((fig, f"Sales by Sub-Category ({sheet_name})"))
-                plt.close(fig)
-                sales_summary = sales_by_sub_category.to_string(index=False)
-            if columns['region'] and columns['sales']:
-                region_sales = df.groupby(columns['region'])[columns['sales']].sum().reset_index()
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.barplot(x=columns['sales'], y=columns['region'], data=region_sales, ax=ax)
-                plt.title(f'Total Sales by Region ({sheet_name})')
-                plt.xlabel('Total Sales ($)')
-                plt.ylabel('Region')
-                figures.append((fig, f"Sales by Region ({sheet_name})"))
-                plt.close(fig)
-                region_sales_summary = region_sales.to_string(index=False)
-            if columns['region'] and columns['profit']:
-                region_profit = df.groupby(columns['region'])[columns['profit']].sum().reset_index()
-                region_profit_summary = region_profit.to_string(index=False)
-            if columns['sales'] and columns['profit']:
-                sales_profit_corr = np.corrcoef(df[columns['sales']].dropna(), df[columns['profit']].dropna())[0, 1]
-                sales_profit_corr = f"Correlation between sales and profit: {sales_profit_corr:.3f}"
-            if columns['customer']:
-                df[columns['customer']] = df[columns['customer']].astype(str).str.strip().str.lower()
-                unique_customers = df[columns['customer']].nunique()
+            # Summaries (Safely initialized to avoid UnboundLocalError)
+            total_v1 = df[columns['sales']].sum() if columns['sales'] else 0
+            total_v2 = df[columns['profit']].sum() if columns['profit'] else 0
+            unique_ent = df[columns['customer']].nunique() if columns['customer'] else 0
+            
+            # Temporal Trend Logic
+            trend_str = "No temporal trend detected."
             if columns['date'] and columns['sales']:
-                df[columns['date']] = pd.to_datetime(df[columns['date']], errors='coerce', dayfirst=True)
-                df['month_year'] = df[columns['date']].dt.to_period('M')
-                monthly_sales = df.groupby('month_year')[columns['sales']].sum().reset_index()
-                monthly_sales['month_year'] = monthly_sales['month_year'].astype(str)
-                monthly_sales = monthly_sales.sort_values('month_year')
-                monthly_sales_display = monthly_sales.sort_values(columns['sales'], ascending=False).head(5)
-                fig, ax = plt.subplots(figsize=(10, 6))
-                sns.lineplot(x='month_year', y='sales', data=monthly_sales, ax=ax) # Fixed to use column name
-                plt.title(f'Monthly Sales Trend ({sheet_name})')
-                plt.xticks(rotation=45)
-                figures.append((fig, f"Monthly Sales Trend ({sheet_name})"))
-                plt.close(fig)
-                monthly_sales_display = monthly_sales_display.to_string(index=False)
-                if columns['profit']:
-                    monthly_profit = df.groupby('month_year')[columns['profit']].sum().reset_index()
-                    monthly_profit['month_year'] = monthly_profit['month_year'].astype(str)
-                    monthly_profit = monthly_profit.sort_values('month_year')
-                    monthly_profit_display = monthly_profit.sort_values(columns['profit'], ascending=False).head(5)
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    sns.lineplot(x='month_year', y='profit', data=monthly_profit, ax=ax)
-                    plt.title(f'Monthly Profit Trend ({sheet_name})')
-                    plt.xticks(rotation=45)
-                    figures.append((fig, f"Monthly Profit Trend ({sheet_name})"))
-                    plt.close(fig)
-                    monthly_profit_display = monthly_profit_display.to_string(index=False)
+                try:
+                    df[columns['date']] = pd.to_datetime(df[columns['date']], errors='coerce')
+                    df_t = df.dropna(subset=[columns['date']])
+                    if not df_t.empty:
+                        df_t['month_year'] = df_t[columns['date']].dt.to_period('M')
+                        trend_agg = df_t.groupby('month_year')[columns['sales']].sum().nlargest(5)
+                        trend_str = trend_agg.to_string()
+                except: pass
 
             analysis_results[sheet_name] = {
+                'column_list': all_cols,
+                'sample_data': data_sample,
+                'metric_1': {'name': columns['sales'], 'total': total_v1},
+                'metric_2': {'name': columns['profit'], 'total': total_v2},
+                'entities': {'name': columns['customer'], 'count': unique_ent},
+                'trend': trend_str,
                 'columns': df.columns.tolist(),
-                'dtypes': {str(k): str(v) for k, v in df.dtypes.to_dict().items()},
-                'nulls': df.isnull().sum().to_string(),
-                'info': info_str,
-                'describe': describe_str,
-                'corr': corr_str,
-                'total_sales': total_sales,
-                'total_profit': total_profit,
-                'profit_by_sub_category': profit_summary,
-                'sales_by_sub_category': sales_summary,
-                'region_sales': region_sales_summary,
-                'region_profit': region_profit_summary,
-                'sub_category_counts': category_counts,
-                'main_category_counts': main_category_counts,
-                'profit_margins': profit_margins,
-                'monthly_sales': monthly_sales_display,
-                'monthly_profit': monthly_profit_display,
-                'sales_profit_corr': sales_profit_corr,
-                'unique_customers': unique_customers,
-                'detected_columns': columns
+                'mapping': columns
             }
-
+            plt.close('all') # Cleanup
+            
         return analysis_results, figures
     except Exception as e:
-        logger.error(f"Error analyzing DataFrames: {str(e)}")
+        logger.error(f"Global analysis error: {e}")
         return None, []
 
-# Question Answering with Groq
+# --- AI ANALYST CORE ---
+
 def answer_question(context, question, retries=3, delay=10):
-    """Queries the Groq API to answer questions based on the provided data context."""
+    """Uses Groq to act as a smart, domain-aware Data Analyst."""
     client = Groq(api_key=GROQ_API_KEY)
+    
+    prompt = f"""You are a professional Data Analyst. 
+First, identify the SUBJECT of the data (e.g., flight delays, medical stats, or business sales) 
+using the provided Sample Rows and Column Names. 
+Then, answer the user's question accurately using ONLY the context provided.
 
-    prompt = f"""You are a data analyst expert. Answer the question accurately and concisely using the provided dataset context.
-
-Dataset Context:
+DATASET CONTEXT:
 {context}
 
-Question: {question}
+USER QUESTION: {question}
 
-Instructions:
-- Use only summaries: total_sales, total_profit, unique_customers, main_category_counts, region_sales, monthly_sales, monthly_profit, sales_profit_corr.
-- For totals, use 'total_sales' and 'total_profit' from 'Merged' sheet; fallback to 'OrderBreakdown'.
-- For unique customers, use 'unique_customers' from 'ListOfOrders' or 'Merged'.
-- For category questions (e.g., average profit by category), use 'main_category_counts' from 'OrderBreakdown' for raw order counts.
-- For region sales (e.g., highest sales region), use 'region_sales' from 'Merged' sheet only.
-- For monthly trends or highest profit month, use 'monthly_sales' and 'monthly_profit' from 'Merged' sheet only. List top 5 months for trends with values; exact month/value for highest profit.
-- Ignore 'SalesTargets' for actual sales or profit.
-- Appliances are part of Office Supplies, not Technology.
-- If data is missing, state 'Data missing; check Merged sheet'.
-- Do not guess or invent data.
-- Format numbers with commas (e.g., 2,348,482) and round averages to 2 decimals.
+INSTRUCTIONS:
+1. Briefly acknowledge the domain (e.g., "Based on the flight records provided...")
+2. Use the actual column names from the data.
+3. If asked for a total or average, refer to the metric summaries provided.
+4. Format numbers with commas (e.g., 1,234,567.89).
+5. If the specific answer is not in the context, say: "The provided summary doesn't contain that specific level of detail."
 """
 
     for attempt in range(retries):
         try:
-            logging.info(f"Attempting Groq API call (Attempt {attempt+1}/{retries})...")
-            completion = client.chat.completions.create(
+            res = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": "You are a professional data analyst."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
                 max_tokens=1024
             )
-            response_text = completion.choices[0].message.content
-            if response_text:
-                return response_text.strip()
-            else:
-                logging.error("No content in Groq response.")
-                return "Error: No valid response from Groq."
+            return res.choices[0].message.content.strip()
         except Exception as e:
-            logging.error(f"Error querying Groq (Attempt {attempt+1}): {str(e)}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-            else:
-                break
+            logger.error(f"AI Attempt {attempt+1} failed: {e}")
+            time.sleep(delay)
+    return "The AI analyst is currently overloaded. Please refer to the raw data and charts above."
 
-    # Fallback response if API fails
-    try:
-        total_sales_part = context.split('Total Sales: ')[1].split('\n')[0] if 'Total Sales: ' in context else 'Not available'
-        total_profit_part = context.split('Total Profit: ')[1].split('\n')[0] if 'Total Profit: ' in context else 'Not available'
-    except Exception:
-        total_sales_part = "Not available"
-        total_profit_part = "Not available"
+# --- STREAMLIT UI ---
 
-    fallback_response = f"""Unable to query the API after {retries} attempts. Here's a basic summary:
-- Total Sales (Merged sheet): {total_sales_part}
-- Total Profit (Merged sheet): {total_profit_part}"""
-    return fallback_response
+st.title("📊 Universal Data Analyst")
+st.markdown("Upload **any** structured or unstructured file for intelligent analysis and chat.")
 
-# Streamlit App
-st.title("📊 Data Analyst App")
-st.markdown("Upload a file (`.docx`, `.txt`, `.xlsx`, `.csv`, `.pdf`, `.png`) and ask questions about the data.")
+uploaded_file = st.file_uploader("Upload File (CSV, Excel, PDF, Docx, Image)", type=["csv", "xlsx", "pdf", "docx", "txt", "png", "jpg"])
 
-uploaded_file = st.file_uploader("Choose a file", type=["docx", "txt", "xlsx", "csv", "pdf", "png"])
-
-if uploaded_file is not None:
-    st.success(f"File `{uploaded_file.name}` uploaded successfully!")
+if uploaded_file:
+    st.success(f"File `{uploaded_file.name}` uploaded!")
     try:
         content = load_file(uploaded_file)
-        st.write("### File Content Preview")
         
-        if isinstance(content, dict):  # Excel or CSV
-            analysis_results, figures = analyze_dataframe(content)
-            if analysis_results:
-                context_parts = []
-                for sheet_name, analysis in analysis_results.items():
-                    total_sales_str = f"${analysis['total_sales']:,.2f}" if analysis['total_sales'] is not None else "Not available"
-                    total_profit_str = f"${analysis['total_profit']:,.2f}" if analysis['total_profit'] is not None else "Not available"
-                    context_parts.append(
-                        f"\nSheet: {sheet_name}\n"
-                        f"Total Sales: {total_sales_str}\n"
-                        f"Total Profit: {total_profit_str}\n"
-                        f"Unique Customers: {analysis['unique_customers'] if analysis['unique_customers'] is not None else 'Not available'}\n"
-                        f"Sales by Region:\n{analysis['region_sales'] or 'Not available'}\n"
-                        f"Main Category Counts:\n{analysis['main_category_counts'] or 'Not available'}\n"
-                        f"Monthly Sales (Top 5):\n{analysis['monthly_sales'] or 'Not available'}\n"
-                        f"Monthly Profit (Top 5):\n{analysis['monthly_profit'] or 'Not available'}\n"
-                        f"Sales-Profit Correlation:\n{analysis['sales_profit_corr'] or 'Not available'}\n"
+        # HANDLE TABULAR DATA
+        if isinstance(content, dict):
+            results, figures = analyze_dataframe(content)
+            if results:
+                global_ai_context = ""
+                for sheet_name, data in results.items():
+                    # Build rich context for the AI
+                    global_ai_context += (
+                        f"Source: {sheet_name}\n"
+                        f"All Columns: {data['column_list']}\n"
+                        f"Sample Rows:\n{data['sample_data']}\n"
+                        f"Metric 1 ({data['metric_1']['name']}): Total {data['metric_1']['total']}\n"
+                        f"Metric 2 ({data['metric_2']['name']}): Total {data['metric_2']['total']}\n"
+                        f"Entities ({data['entities']['name']}): {data['entities']['count']} unique entries\n"
+                        f"Trends: {data['trend']}\n---\n"
                     )
-                    st.subheader(f"Sheet: {sheet_name}")
-                    if sheet_name in content:
-                        st.dataframe(content[sheet_name].head())
+                    st.subheader(f"Data Preview: {sheet_name}")
+                    st.dataframe(content[sheet_name].head(10))
                 
-                context = "\n".join(context_parts)[:1000]
-                st.write("### Analysis Summary")
-                st.text(context[:500] + "..." if len(context) > 500 else context)
-                
-                st.write("### Visualizations")
+                st.write("### 📈 Visual Insights")
                 if figures:
-                    cols = st.columns(2)
-                    for i, (fig, caption) in enumerate(figures):
-                        with cols[i % 2]:
+                    ui_cols = st.columns(2)
+                    for idx, (fig, cap) in enumerate(figures):
+                        with ui_cols[idx % 2]:
                             st.pyplot(fig)
-                            st.caption(caption)
+                            st.caption(cap)
                 
-                st.write("### Ask a Question")
-                question = st.text_input("Enter your question about the data:", key="question_input")
-                if st.button("Submit Question"):
-                    if question:
-                        with st.spinner("Processing question..."):
-                            answer = answer_question(context, question)
-                            st.write("#### Answer")
-                            st.markdown(answer)
-                    else:
-                        st.warning("Please enter a question.")
+                st.write("### 💬 Ask the Analyst")
+                user_q = st.text_input("Ask anything (e.g., 'Identify the subject and summarize', 'What is the highest value in [column]?')")
+                if st.button("Submit Question") and user_q:
+                    with st.spinner("AI is analyzing domain and data..."):
+                        st.markdown("#### Analyst Response")
+                        st.info(answer_question(global_ai_context, user_q))
             else:
-                st.error("Analysis failed due to errors.")
+                st.error("Analysis failed. Check your file for empty or corrupted data.")
                 
-        elif isinstance(content, str):  # Text, PDF, or PNG
-            context = f"Textual content:\n{content[:1000]}"
-            st.text_area("Extracted Text", content[:500] + "..." if len(content) > 500 else content, height=200)
-            if uploaded_file.type == "image/png":
-                uploaded_file.seek(0)
-                st.image(uploaded_file, caption="Uploaded Image", use_container_width=True)
+        # HANDLE UNSTRUCTURED DATA
+        elif isinstance(content, str):
+            st.write("### 📄 Extracted Content Preview")
+            st.text_area("Content", content[:2000], height=300)
+            
+            if "image" in uploaded_file.type:
+                st.image(uploaded_file, caption="Uploaded Document", use_container_width=True)
                 
-            st.write("### Ask a Question")
-            question = st.text_input("Enter your question about the content:", key="question_input_text")
-            if st.button("Submit Question", key="submit_text"):
-                if question:
-                    with st.spinner("Processing question..."):
-                        answer = answer_question(context, question)
-                        st.write("#### Answer")
-                        st.markdown(answer)
-                else:
-                    st.warning("Please enter a question.")
+            st.write("### 💬 Ask about this Document")
+            user_q = st.text_input("Enter your question:")
+            if st.button("Query Text") and user_q:
+                with st.spinner("AI is reading document..."):
+                    # Pass the first 4000 chars as context for AI
+                    st.markdown(answer_question(content[:4000], user_q))
                 
     except Exception as e:
-        st.error(f"Error processing file: {str(e)}")
-        st.info("Please ensure the file is valid and dependencies are installed.")
+        st.error(f"Processing Error: {str(e)}")
 else:
-    st.info("Please upload a file to begin analysis.")
+    st.info("Please upload a file to begin.")
