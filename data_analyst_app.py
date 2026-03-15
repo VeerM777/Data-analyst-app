@@ -13,6 +13,7 @@ from docx import Document
 import openpyxl
 import requests
 import time
+from groq import Groq
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,9 +23,9 @@ logger = logging.getLogger(__name__)
 st.set_page_config(page_title="Data Analyst App", layout="wide")
 
 # Setup API Key
-TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
-if not TOGETHER_API_KEY:
-    st.error("TOGETHER_API_KEY not set. Please set it in Render's Environment Variables.")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    st.error("GROQ_API_KEY not set. Please set it in Render's Environment Variables.")
     st.stop()
 
 # Custom Describe Function
@@ -193,7 +194,6 @@ def analyze_dataframe(data_dict):
                 figures.append((fig, f"Histogram of {col} ({sheet_name})"))
                 logger.info(f"Created histogram for {col} in sheet {sheet_name}")
                 plt.close(fig)
-                logger.info(f"Closed histogram for {col} in sheet {sheet_name}")
             if categorical_cols.size > 0:
                 col = categorical_cols[0]
                 fig, ax = plt.subplots(figsize=(8, 6))
@@ -202,7 +202,6 @@ def analyze_dataframe(data_dict):
                 figures.append((fig, f"Bar Chart of {col} ({sheet_name})"))
                 logger.info(f"Created bar chart for {col} in sheet {sheet_name}")
                 plt.close(fig)
-                logger.info(f"Closed bar chart for {col} in sheet {sheet_name}")
 
             if columns['sub_category'] and columns['profit']:
                 profit_by_sub_category = df.groupby(columns['sub_category'])[columns['profit']].agg(['sum', 'count']).reset_index()
@@ -213,9 +212,7 @@ def analyze_dataframe(data_dict):
                 plt.xlabel('Total Profit ($)')
                 plt.ylabel('Sub-Category')
                 figures.append((fig, f"Profit by Sub-Category ({sheet_name})"))
-                logger.info(f"Created profit by sub-category plot for {sheet_name}")
                 plt.close(fig)
-                logger.info(f"Closed profit by sub-category plot for {sheet_name}")
                 profit_summary = profit_by_sub_category.to_string(index=False)
                 profit_by_sub_category['average_profit'] = profit_by_sub_category['total_profit'] / profit_by_sub_category['order_count']
                 category_counts = profit_by_sub_category[[columns['sub_category'], 'order_count', 'average_profit']].to_string(index=False)
@@ -237,9 +234,7 @@ def analyze_dataframe(data_dict):
                 plt.xlabel('Total Sales ($)')
                 plt.ylabel('Sub-Category')
                 figures.append((fig, f"Sales by Sub-Category ({sheet_name})"))
-                logger.info(f"Created sales by sub-category plot for {sheet_name}")
                 plt.close(fig)
-                logger.info(f"Closed sales by sub-category plot for {sheet_name}")
                 sales_summary = sales_by_sub_category.to_string(index=False)
             if columns['region'] and columns['sales']:
                 region_sales = df.groupby(columns['region'])[columns['sales']].sum().reset_index()
@@ -249,9 +244,7 @@ def analyze_dataframe(data_dict):
                 plt.xlabel('Total Sales ($)')
                 plt.ylabel('Region')
                 figures.append((fig, f"Sales by Region ({sheet_name})"))
-                logger.info(f"Created sales by region plot for {sheet_name}")
                 plt.close(fig)
-                logger.info(f"Closed sales by region plot for {sheet_name}")
                 region_sales_summary = region_sales.to_string(index=False)
             if columns['region'] and columns['profit']:
                 region_profit = df.groupby(columns['region'])[columns['profit']].sum().reset_index()
@@ -274,9 +267,7 @@ def analyze_dataframe(data_dict):
                 plt.title(f'Monthly Sales Trend ({sheet_name})')
                 plt.xticks(rotation=45)
                 figures.append((fig, f"Monthly Sales Trend ({sheet_name})"))
-                logger.info(f"Created monthly sales trend plot for {sheet_name}")
                 plt.close(fig)
-                logger.info(f"Closed monthly sales trend plot for {sheet_name}")
                 monthly_sales_display = monthly_sales_display.to_string(index=False)
                 if columns['profit']:
                     monthly_profit = df.groupby('month_year')[columns['profit']].sum().reset_index()
@@ -288,9 +279,7 @@ def analyze_dataframe(data_dict):
                     plt.title(f'Monthly Profit Trend ({sheet_name})')
                     plt.xticks(rotation=45)
                     figures.append((fig, f"Monthly Profit Trend ({sheet_name})"))
-                    logger.info(f"Created monthly profit trend plot for {sheet_name}")
                     plt.close(fig)
-                    logger.info(f"Closed monthly profit trend plot for {sheet_name}")
                     monthly_profit_display = monthly_profit_display.to_string(index=False)
 
             analysis_results[sheet_name] = {
@@ -321,8 +310,11 @@ def analyze_dataframe(data_dict):
         logger.error(f"Error analyzing DataFrames: {str(e)}")
         return None, []
 
-# Question Answering with Fallback
-def answer_question(context, question, retries=3, delay=10, timeout=60):
+# Question Answering with Groq
+def answer_question(context, question, retries=3, delay=10):
+    """Queries the Groq API to answer questions based on the provided data context."""
+    client = Groq(api_key=GROQ_API_KEY)
+
     prompt = f"""You are a data analyst expert. Answer the question accurately and concisely using the provided dataset context.
 
 Dataset Context:
@@ -343,62 +335,54 @@ Instructions:
 - Do not guess or invent data.
 - Format numbers with commas (e.g., 2,348,482) and round averages to 2 decimals.
 """
-    url = "https://api.together.xyz/v1/completions"
-    headers = {
-        "Authorization": f"Bearer {TOGETHER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "meta-llama/Llama-3-8b-chat-hf",
-        "prompt": prompt,
-        "temperature": 0.7,
-        "max_tokens": 512
-    }
+
     for attempt in range(retries):
         try:
-            logger.info(f"Attempting API call (Attempt {attempt+1}/{retries})...")
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
-            response.raise_for_status()
-            result = response.json()
-            if "choices" in result and result["choices"]:
-                return result["choices"][0]["text"].strip()
+            logging.info(f"Attempting Groq API call (Attempt {attempt+1}/{retries})...")
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": "You are a professional data analyst."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=1024
+            )
+            response_text = completion.choices[0].message.content
+            if response_text:
+                return response_text.strip()
             else:
-                logger.error("No choices in API response.")
-                return "Error: No valid response from API."
-        except requests.exceptions.Timeout:
-            logger.error(f"API request timed out after {timeout} seconds.")
-            st.error(f"API request timed out after {timeout} seconds. Retrying...")
-            time.sleep(delay)
-        except requests.exceptions.HTTPError as e:
-            if response.status_code == 429:
-                logger.warning(f"Rate limit error (429). Retrying in {delay} seconds... (Attempt {attempt+1}/{retries})")
-                st.warning(f"Rate limit reached. Retrying in {delay} seconds... (Attempt {attempt+1}/{retries})")
+                logging.error("No content in Groq response.")
+                return "Error: No valid response from Groq."
+        except Exception as e:
+            logging.error(f"Error querying Groq (Attempt {attempt+1}): {str(e)}")
+            if attempt < retries - 1:
                 time.sleep(delay)
             else:
-                logger.error(f"HTTP error querying Together AI: {str(e)}")
-                return f"Error querying Together AI: {str(e)}"
-        except Exception as e:
-            logger.error(f"Unexpected error querying Together AI: {str(e)}")
-            return f"Unexpected error querying Together AI: {str(e)}"
-    # Fallback response if API fails after retries
-    total_sales_part = context.split('Total Sales: ')[1].split('\n')[0] if 'Total Sales: ' in context else 'Not available'
-    total_profit_part = context.split('Total Profit: ')[1].split('\n')[0] if 'Total Profit: ' in context else 'Not available'
-    fallback_response = f"""Unable to query the API after {retries} attempts due to timeout. Here's a basic summary:
+                break
+
+    # Fallback response if API fails
+    try:
+        total_sales_part = context.split('Total Sales: ')[1].split('\n')[0] if 'Total Sales: ' in context else 'Not available'
+        total_profit_part = context.split('Total Profit: ')[1].split('\n')[0] if 'Total Profit: ' in context else 'Not available'
+    except Exception:
+        total_sales_part = "Not available"
+        total_profit_part = "Not available"
+
+    fallback_response = f"""Unable to query the API after {retries} attempts. Here's a basic summary:
 - Total Sales (Merged sheet): {total_sales_part}
 - Total Profit (Merged sheet): {total_profit_part}"""
     return fallback_response
 
 # Streamlit App
 st.title("📊 Data Analyst App")
-st.markdown("Upload a file (`.docx`, `.txt`, `.xlsx`, `.csv`, `.pdf`, `.png`) and ask questions about the data. Visualizations are generated for tabular files.")
+st.markdown("Upload a file (`.docx`, `.txt`, `.xlsx`, `.csv`, `.pdf`, `.png`) and ask questions about the data.")
 
-# File uploader
 uploaded_file = st.file_uploader("Choose a file", type=["docx", "txt", "xlsx", "csv", "pdf", "png"])
 
 if uploaded_file is not None:
     st.success(f"File `{uploaded_file.name}` uploaded successfully!")
     try:
-        # Load file
         content = load_file(uploaded_file)
         st.write("### File Content Preview")
         
@@ -423,11 +407,11 @@ if uploaded_file is not None:
                     st.subheader(f"Sheet: {sheet_name}")
                     if sheet_name in content:
                         st.dataframe(content[sheet_name].head())
+                
                 context = "\n".join(context_parts)[:1000]
                 st.write("### Analysis Summary")
                 st.text(context[:500] + "..." if len(context) > 500 else context)
                 
-                # Display visualizations
                 st.write("### Visualizations")
                 if figures:
                     cols = st.columns(2)
@@ -435,11 +419,7 @@ if uploaded_file is not None:
                         with cols[i % 2]:
                             st.pyplot(fig)
                             st.caption(caption)
-                            logger.info(f"Displayed figure: {caption}")
-                else:
-                    st.info("No visualizations generated for this file.")
                 
-                # Question input
                 st.write("### Ask a Question")
                 question = st.text_input("Enter your question about the data:", key="question_input")
                 if st.button("Submit Question"):
@@ -458,9 +438,8 @@ if uploaded_file is not None:
             st.text_area("Extracted Text", content[:500] + "..." if len(content) > 500 else content, height=200)
             if uploaded_file.type == "image/png":
                 uploaded_file.seek(0)
-                st.image(uploaded_file, caption="Uploaded Image", use_column_width=True)
+                st.image(uploaded_file, caption="Uploaded Image", use_container_width=True)
                 
-            # Question input for text-based files
             st.write("### Ask a Question")
             question = st.text_input("Enter your question about the content:", key="question_input_text")
             if st.button("Submit Question", key="submit_text"):
@@ -475,6 +454,5 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Error processing file: {str(e)}")
         st.info("Please ensure the file is valid and dependencies are installed.")
-
 else:
     st.info("Please upload a file to begin analysis.")
